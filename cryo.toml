@@ -1,0 +1,6 @@
+[package]
+name = "cryo_calculator"
+version = "0.1.0"
+
+[dependencies]
+cryo_math = "../Cryo-Math"

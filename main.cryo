@@ -1,0 +1,130 @@
+// ============================================================
+//  Cryo Calculator — calculadora científica em Cryo
+//
+//  Modo interativo:
+//      python burnout/cryoc.py Cryo_Calculator/main.cryo --backend pyro --run
+//
+//  Modo linha de comando (avalia e sai):
+//      pyrovm build/main.pyro "2 * sin(pi/6) + 3^2"
+// ============================================================
+
+import "calc.cryo" as calc;
+
+string[] _history = [];
+
+fn help() ={
+    print("");
+    print("Operadores   +  -  *  /  %  ^  !    ( )    ex.: 2(3 + 4)^2 / 7");
+    print("Constantes   pi  e  tau  phi  ans (ultimo resultado)");
+    print("Variaveis    x = 3.5      depois use: 2x + 1");
+    print("Numeros      42  3.14  .5  1.5e3  2E-4");
+    print("");
+    print("Funcoes");
+    print("  trigonometria  sin cos tan asin acos atan atan2(y, x)");
+    print("  hiperbolicas   sinh cosh tanh asinh acosh atanh");
+    print("  raizes         sqrt cbrt root(x, n) hypot(a, b)");
+    print("  potencias/log  pow(x, y) exp ln log log(x, base) log2");
+    print("  arredondar     abs sign floor ceil round round(x, casas) trunc frac");
+    print("  inteiros       fact fib gcd lcm ncr(n, k) npr(n, k) mod(a, b) isprime");
+    print("  estatistica    sum mean median stddev var min max prod  (varios args)");
+    print("  outros         percent(valor, pct) rad(graus) deg(radianos)");
+    print("");
+    print("Comandos     deg / rad   modo de angulo (atual: " + mode_name() + ")");
+    print("             vars        lista as variaveis");
+    print("             hist        historico da sessao");
+    print("             clear       apaga variaveis e ans");
+    print("             help        esta ajuda");
+    print("             sair        encerra (tambem: q, quit, exit)");
+    print("");
+}
+
+fn mode_name() -> string ={
+    if (calc::is_degrees()) { return "graus"; }
+    return "radianos";
+}
+
+fn show_vars() ={
+    map<string, number> vs = calc::variables();
+    if (len(vs) == 0) {
+        print("(nenhuma variavel definida)");
+        return;
+    }
+    for (string name, number v in vs) {
+        print("  " + name + " = " + calc::format_number(v));
+    }
+}
+
+fn show_history() ={
+    if (len(_history) == 0) {
+        print("(historico vazio)");
+        return;
+    }
+    for (int i, string h in enumerate(_history)) {
+        print("  ${i + 1:>3}  " + h);
+    }
+}
+
+fn is_quit(string cmd) -> bool ={
+    return cmd == "q" || cmd == "quit" || cmd == "exit" || cmd == "sair";
+}
+
+// Trata comandos; devolve false se a linha não era um comando.
+fn command(string cmd) -> bool ={
+    if (cmd == "help" || cmd == "ajuda" || cmd == "?") { help(); return true; }
+    if (cmd == "vars") { show_vars(); return true; }
+    if (cmd == "hist") { show_history(); return true; }
+    if (cmd == "clear") {
+        calc::clear();
+        print("variaveis apagadas");
+        return true;
+    }
+    if (cmd == "deg") {
+        calc::set_degrees(true);
+        print("modo: graus");
+        return true;
+    }
+    if (cmd == "rad") {
+        calc::set_degrees(false);
+        print("modo: radianos");
+        return true;
+    }
+    return false;
+}
+
+fn repl() ={
+    print("=== Cryo Calculator ===");
+    print("Digite uma expressao, 'help' para ajuda ou 'sair' para encerrar.");
+    int blanks = 0;
+    bool running = true;
+    while (running) {
+        string line = trim(input("> "));
+        string cmd = lower(line);
+        if (line == "") {
+            // input() devolve "" no fim da entrada (EOF): evita laço infinito
+            blanks++;
+            if (blanks >= 50) { running = false; }
+        } else if (is_quit(cmd)) {
+            running = false;
+        } else {
+            blanks = 0;
+            if (!command(cmd)) {
+                string result = calc::execute(line);
+                print("= " + result);
+                if (!starts_with(result, "Erro")) {
+                    _history.push(line + "  =  " + result);
+                }
+            }
+        }
+    }
+    print("Ate logo!");
+}
+
+// ── entrada ──────────────────────────────────────────────────
+
+string[] argv = args();
+if (len(argv) > 0) {
+    string expr = join(argv, " ");
+    print(calc::execute(expr));
+} else {
+    repl();
+}

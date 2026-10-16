@@ -1,0 +1,157 @@
+// ============================================================
+//  Testes do Cryo Calculator
+//
+//      python burnout/cryoc.py Cryo_Calculator/tests/test_calc.cryo --backend pyro --run
+//
+//  O programa termina com um assert: o código de saída é != 0 se
+//  algum caso falhar.
+// ============================================================
+
+import "../calc.cryo" as calc;
+
+int passed = 0;
+int failed = 0;
+
+fn expect(string input, string want) ={
+    string got = calc::execute(input);
+    if (got == want) {
+        passed = passed + 1;
+    } else {
+        failed = failed + 1;
+        print("  FALHOU  " + input + "  ->  " + got + "   (esperado " + want + ")");
+    }
+}
+
+fn expect_error(string input) ={
+    string got = calc::execute(input);
+    if (starts_with(got, "Erro: ")) {
+        passed = passed + 1;
+    } else {
+        failed = failed + 1;
+        print("  FALHOU  " + input + "  ->  " + got + "   (esperado um erro)");
+    }
+}
+
+print("Cryo Calculator — testes");
+
+// precedência e associatividade
+expect("1 + 2 * 3", "7");
+expect("(1 + 2) * 3", "9");
+expect("10 - 4 - 3", "3");
+expect("100 / 10 / 5", "2");
+expect("2^3^2", "512");
+expect("-2^2", "-4");
+expect("(-2)^2", "4");
+expect("2^-1", "0.5");
+expect("-(-3)", "3");
+expect("+5", "5");
+expect("10 % 3", "1");
+expect("5!", "120");
+expect("3!!", "720");
+expect("2 * 3!", "12");
+
+// números
+expect("0.1 + 0.2", "0.3");
+expect(".5 * 4", "2");
+expect("1.5e3 + 2E-4", "1500.0002");
+expect("10 / 3", "3.33333333333");
+expect("2 / 3", "0.666666666667");
+expect("1000000 * 1000000", "1000000000000");
+
+// multiplicação implícita
+expect("2pi", "6.28318530718");
+expect("3(4 + 1)", "15");
+expect("2 sqrt(9)", "6");
+expect("(1 + 1)(2 + 2)", "8");
+
+// constantes e funções
+expect("pi", "3.14159265359");
+expect("e", "2.71828182846");
+expect("sqrt(144)", "12");
+expect("cbrt(-27)", "-3");
+expect("root(32, 5)", "2");
+expect("hypot(3, 4)", "5");
+expect("pow(2, 10)", "1024");
+expect("exp(0)", "1");
+expect("ln(e)", "1");
+expect("log(1000)", "3");
+expect("log(8, 2)", "3");
+expect("log2(1024)", "10");
+expect("abs(-7.5)", "7.5");
+expect("floor(-2.5)", "-3");
+expect("ceil(2.1)", "3");
+expect("round(2.5)", "3");
+expect("round(pi, 2)", "3.14");
+expect("trunc(-7.9)", "-7");
+expect("fib(10)", "55");
+expect("gcd(84, 36)", "12");
+expect("lcm(4, 6)", "12");
+expect("ncr(52, 5)", "2598960");
+expect("npr(5, 2)", "20");
+expect("mod(-7, 3)", "2");
+expect("isprime(97)", "1");
+expect("isprime(91)", "0");
+expect("percent(250, 15)", "37.5");
+
+// trigonometria em radianos
+expect("sin(pi / 6)", "0.5");
+expect("cos(pi)", "-1");
+expect("cos(pi / 2)", "0");
+expect("sin(pi)", "0");
+expect("tan(pi / 4)", "1");
+expect("atan(1) * 4", "3.14159265359");
+expect("sinh(0)", "0");
+expect("tanh(100)", "1");
+
+// estatística
+expect("sum(1, 2, 3, 4)", "10");
+expect("mean(1, 2, 3, 4)", "2.5");
+expect("median(5, 1, 3)", "3");
+expect("stddev(2, 4, 4, 4, 5, 5, 7, 9)", "2");
+expect("min(4, -2, 9)", "-2");
+expect("max(4, -2, 9)", "9");
+expect("prod(2, 3, 4)", "24");
+
+// variáveis e ans
+calc::clear();
+expect("x = 3.5", "3.5");
+expect("2x + 1", "8");
+expect("ans * 2", "16");
+expect("y = x^2", "12.25");
+expect("y - x", "8.75");
+
+// modo graus
+calc::set_degrees(true);
+expect("sin(30)", "0.5");
+expect("cos(90)", "0");
+expect("tan(45)", "1");
+expect("asin(1)", "90");
+expect("atan2(1, 1)", "45");
+calc::set_degrees(false);
+expect("asin(1)", "1.57079632679");
+
+// erros
+expect_error("1 / 0");
+expect_error("5 % 0");
+expect_error("sqrt(-1)");
+expect_error("ln(0)");
+expect_error("asin(2)");
+expect_error("2.5!");
+expect_error("21!");
+expect_error("tan(pi / 2)");
+expect_error("exp(1000)");
+expect_error("foo(1)");
+expect_error("z + 1");
+expect_error("pi = 3");
+expect_error("2 +");
+expect_error("(3");
+expect_error("3)");
+expect_error("2 $ 3");
+expect_error("sqrt(1, 2)");
+expect_error("pow(2)");
+expect_error("mean()");
+expect_error(".");
+expect_error("");
+
+print("${passed} ok, ${failed} falha(s)");
+assert(failed == 0, "ha testes falhando");
