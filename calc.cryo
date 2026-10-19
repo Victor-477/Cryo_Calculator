@@ -1,0 +1,479 @@
+// ============================================================
+//  Cryo Calculator — motor de avaliação de expressões
+//
+//  Recebe uma linha de texto ("2 * sin(pi/6) + 3^2") e devolve o
+//  resultado. Toda a matemática vem da biblioteca Cryo-Math.
+//
+//  Gramática (do menor para o maior precedência):
+//
+//      linha     := IDENT '=' expr | expr
+//      expr      := termo (('+' | '-') termo)*
+//      termo     := unario (('*' | '/' | '%') unario)*
+//                 | unario unario          (multiplicação implícita: 2pi, 3(4+1))
+//      unario    := ('-' | '+') unario | potencia
+//      potencia  := posfixo ('^' unario)?  (associativa à direita: 2^3^2 = 2^9)
+//      posfixo   := primario '!'*          (fatorial)
+//      primario  := NUMERO | IDENT | IDENT '(' args ')' | '(' expr ')'
+//
+//  Erros (sintaxe, variável desconhecida, domínio) são lançados com
+//  `throw` e convertidos em "Erro: ..." por execute().
+// ============================================================
+
+import "@cryo_math/math.cryo" as m;
+
+
+// ── Estado da calculadora ────────────────────────────────────
+
+map<string, number> _vars = {};
+bool _degrees = false;
+number _ans = 0.0;
+
+// Tokens da linha atual (arrays paralelos) e posição do parser.
+string[] _kinds = [];
+string[] _texts = [];
+number[] _nums = [];
+int _pos = 0;
+
+
+fn _fail(string msg) -> number ={
+    throw(msg);
+}
+
+fn _fail_bool(string msg) -> bool ={
+    throw(msg);
+}
+
+
+// ── Tokenizador ──────────────────────────────────────────────
+
+fn _is_digit(string c) -> bool ={
+    return c >= "0" && c <= "9";
+}
+
+fn _is_letter(string c) -> bool ={
+    return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || c == "_";
+}
+
+fn _push(string kind, string text, number value) ={
+    _kinds.push(kind);
+    _texts.push(text);
+    _nums.push(value);
+}
+
+fn _tokenize(string src) -> bool ={
+    // novos arrays via variáveis tipadas (o backend go não tipa `[]` numa atribuição)
+    string[] kinds = [];
+    string[] texts = [];
+    number[] nums = [];
+    _kinds = kinds;
+    _texts = texts;
+    _nums = nums;
+    _pos = 0;
+    int n = len(src);
+    int i = 0;
+    while (i < n) {
+        string c = src[i];
+        if (c == " " || c == "\t" || c == "\r" || c == "\n") {
+            i++;
+        } else if (_is_digit(c) || c == ".") {
+            int start = i;
+            int digits = 0;
+            while (i < n && _is_digit(src[i])) { i++; digits++; }
+            if (i < n && src[i] == ".") {
+                i++;
+                while (i < n && _is_digit(src[i])) { i++; digits++; }
+            }
+            if (digits == 0) { return _fail_bool("numero invalido '.'"); }
+            // expoente: 1.5e3, 2E-4 — mas "2e" sozinho é 2 * e
+            if (i < n && (src[i] == "e" || src[i] == "E")) {
+                int j = i + 1;
+                if (j < n && (src[j] == "+" || src[j] == "-")) { j++; }
+                if (j < n && _is_digit(src[j])) {
+                    i = j;
+                    while (i < n && _is_digit(src[i])) { i++; }
+                }
+            }
+            string text = substr(src, start, i - start);
+            if (starts_with(text, ".")) { text = "0" + text; }
+            _push("num", text, to_number(text));
+        } else if (_is_letter(c)) {
+            int start = i;
+            while (i < n && (_is_letter(src[i]) || _is_digit(src[i]))) { i++; }
+            _push("id", lower(substr(src, start, i - start)), 0.0);
+        } else if (contains("+-*/%^!(),=", c)) {
+            _push("op", c, 0.0);
+            i++;
+        } else {
+            return _fail_bool("caractere inesperado '" + c + "'");
+        }
+    }
+    _push("end", "", 0.0);
+    return true;
+}
+
+
+// ── Navegação nos tokens ─────────────────────────────────────
+
+fn _kind() -> string ={ return _kinds[_pos]; }
+fn _text() -> string ={ return _texts[_pos]; }
+
+fn _is_op(string op) -> bool ={
+    return _kinds[_pos] == "op" && _texts[_pos] == op;
+}
+
+fn _describe() -> string ={
+    if (_kind() == "end") { return "fim da expressao"; }
+    return "'" + _text() + "'";
+}
+
+fn _expect(string op) -> bool ={
+    if (!_is_op(op)) {
+        return _fail_bool("esperado '" + op + "', encontrado " + _describe());
+    }
+    _pos++;
+    return true;
+}
+
+
+// ── Ângulos ──────────────────────────────────────────────────
+
+fn _to_rad(number x) -> number ={
+    if (_degrees) { return m::deg_to_rad(x); }
+    return x;
+}
+
+fn _from_rad(number x) -> number ={
+    if (_degrees) { return m::rad_to_deg(x); }
+    return x;
+}
+
+
+// ── Funções da calculadora ───────────────────────────────────
+
+fn _need(string name, number[] args, int count) -> bool ={
+    if (len(args) != count) {
+        string s = "s";
+        if (count == 1) { s = ""; }
+        return _fail_bool(name + "() espera " + to_string(count) + " argumento" + s
+                          + ", recebeu " + to_string(len(args)));
+    }
+    return true;
+}
+
+fn _need_some(string name, number[] args) -> bool ={
+    if (len(args) == 0) { return _fail_bool(name + "() espera pelo menos 1 argumento"); }
+    return true;
+}
+
+fn _to_int(string name, number x) -> int ={
+    if (!m::is_integer(x)) {
+        throw(name + "() espera um numero inteiro, recebeu " + format_number(x));
+    }
+    if (m::abs(x) > 9000000000000000000.0) { throw(name + "(): inteiro grande demais"); }
+    return to_int(x);
+}
+
+fn _factorial(number x) -> number ={
+    return to_number(m::factorial(_to_int("fatorial", x)));
+}
+
+// Resíduo de arredondamento de π (ex.: cos(90°) ≈ 6e-17) vira 0.
+fn _snap(number x) -> number ={
+    if (m::abs(x) < 0.00000000000001) { return 0.0; }
+    return x;
+}
+
+// Funções de um argumento.
+fn _call1(string f, number x) -> number ={
+    if (f == "sin") { return _snap(m::sin(_to_rad(x))); }
+    if (f == "cos") { return _snap(m::cos(_to_rad(x))); }
+    if (f == "tan") { return _snap(m::tan(_to_rad(x))); }
+    if (f == "asin") { return _from_rad(m::asin(x)); }
+    if (f == "acos") { return _from_rad(m::acos(x)); }
+    if (f == "atan") { return _from_rad(m::atan(x)); }
+    if (f == "sinh") { return m::sinh(x); }
+    if (f == "cosh") { return m::cosh(x); }
+    if (f == "tanh") { return m::tanh(x); }
+    if (f == "asinh") { return m::asinh(x); }
+    if (f == "acosh") { return m::acosh(x); }
+    if (f == "atanh") { return m::atanh(x); }
+    if (f == "sqrt" || f == "raiz") { return m::sqrt(x); }
+    if (f == "cbrt") { return m::cbrt(x); }
+    if (f == "exp") { return m::exp(x); }
+    if (f == "ln") { return m::ln(x); }
+    if (f == "log" || f == "log10") { return m::log10(x); }
+    if (f == "log2") { return m::log2(x); }
+    if (f == "abs") { return m::abs(x); }
+    if (f == "sign") { return m::sign(x); }
+    if (f == "floor") { return m::floor(x); }
+    if (f == "ceil") { return m::ceil(x); }
+    if (f == "round") { return m::round(x); }
+    if (f == "trunc") { return m::trunc(x); }
+    if (f == "frac") { return m::frac(x); }
+    if (f == "fact") { return _factorial(x); }
+    if (f == "fib") { return to_number(m::fib(_to_int("fib", x))); }
+    if (f == "rad") { return m::deg_to_rad(x); }
+    if (f == "deg") { return m::rad_to_deg(x); }
+    if (f == "isprime") {
+        if (m::is_prime(_to_int("isprime", x))) { return 1.0; }
+        return 0.0;
+    }
+    return _fail("funcao desconhecida '" + f + "'");
+}
+
+// Funções de dois argumentos.
+fn _call2(string f, number a, number b) -> number ={
+    if (f == "pow") { return m::pow(a, b); }
+    if (f == "root") { return m::nth_root(a, _to_int("root", b)); }
+    if (f == "log") { return m::log(a, b); }
+    if (f == "atan2") { return _from_rad(m::atan2(a, b)); }
+    if (f == "hypot") { return m::hypot(a, b); }
+    if (f == "mod") { return m::mod(a, b); }
+    if (f == "round") { return m::round_to(a, _to_int("round", b)); }
+    if (f == "gcd" || f == "mdc") { return to_number(m::gcd(_to_int(f, a), _to_int(f, b))); }
+    if (f == "lcm" || f == "mmc") { return to_number(m::lcm(_to_int(f, a), _to_int(f, b))); }
+    if (f == "ncr") { return to_number(m::binomial(_to_int("ncr", a), _to_int("ncr", b))); }
+    if (f == "npr") { return to_number(m::permutations(_to_int("npr", a), _to_int("npr", b))); }
+    if (f == "percent") { return m::percent(a, b); }
+    return _fail("funcao desconhecida '" + f + "'");
+}
+
+// Funções com qualquer número de argumentos.
+fn _is_variadic(string f) -> bool ={
+    return f == "min" || f == "max" || f == "sum" || f == "mean" || f == "avg"
+        || f == "median" || f == "stddev" || f == "var" || f == "prod";
+}
+
+fn _call_n(string f, number[] args) -> number ={
+    _need_some(f, args);
+    if (f == "min") { return m::min_of(args); }
+    if (f == "max") { return m::max_of(args); }
+    if (f == "sum") { return m::sum(args); }
+    if (f == "prod") { return m::product(args); }
+    if (f == "mean" || f == "avg") { return m::mean(args); }
+    if (f == "median") { return m::median(args); }
+    if (f == "stddev") { return m::std_dev(args); }
+    return m::variance(args);
+}
+
+fn _is_binary(string f) -> bool ={
+    return f == "pow" || f == "root" || f == "atan2" || f == "hypot" || f == "mod"
+        || f == "gcd" || f == "mdc" || f == "lcm" || f == "mmc" || f == "ncr"
+        || f == "npr" || f == "percent";
+}
+
+fn _apply(string f, number[] args) -> number ={
+    if (_is_variadic(f)) { return _call_n(f, args); }
+    // log e round aceitam 1 ou 2 argumentos
+    if ((f == "log" || f == "round") && len(args) == 2) { return _call2(f, args[0], args[1]); }
+    if (_is_binary(f)) {
+        _need(f, args, 2);
+        return _call2(f, args[0], args[1]);
+    }
+    _need(f, args, 1);
+    return _call1(f, args[0]);
+}
+
+
+// ── Variáveis e constantes ───────────────────────────────────
+
+fn _is_constant(string name) -> bool ={
+    return name == "pi" || name == "e" || name == "tau" || name == "phi" || name == "ans";
+}
+
+fn _lookup(string name) -> number ={
+    if (name == "pi") { return m::PI; }
+    if (name == "e") { return m::E; }
+    if (name == "tau") { return m::TAU; }
+    if (name == "phi") { return m::PHI; }
+    if (name == "ans") { return _ans; }
+    if (has(_vars, name)) { return _vars[name]; }
+    return _fail("variavel desconhecida '" + name + "'");
+}
+
+
+// ── Parser / avaliador ───────────────────────────────────────
+
+fn _primary() -> number ={
+    if (_kind() == "num") {
+        number v = _nums[_pos];
+        _pos++;
+        return v;
+    }
+    if (_kind() == "id") {
+        string name = _text();
+        _pos++;
+        if (_is_op("(")) {
+            _pos++;
+            number[] args = [];
+            if (!_is_op(")")) {
+                args.push(_expr());
+                while (_is_op(",")) {
+                    _pos++;
+                    args.push(_expr());
+                }
+            }
+            _expect(")");
+            return _apply(name, args);
+        }
+        return _lookup(name);
+    }
+    if (_is_op("(")) {
+        _pos++;
+        number v = _expr();
+        _expect(")");
+        return v;
+    }
+    return _fail("valor esperado, encontrado " + _describe());
+}
+
+fn _postfix() -> number ={
+    number v = _primary();
+    while (_is_op("!")) {
+        _pos++;
+        v = _factorial(v);
+    }
+    return v;
+}
+
+fn _power() -> number ={
+    number base = _postfix();
+    if (_is_op("^")) {
+        _pos++;
+        number expo = _unary();    // à direita: 2^-1, 2^3^2
+        return m::pow(base, expo);
+    }
+    return base;
+}
+
+fn _unary() -> number ={
+    if (_is_op("-")) {
+        _pos++;
+        return -_unary();
+    }
+    if (_is_op("+")) {
+        _pos++;
+        return _unary();
+    }
+    return _power();
+}
+
+// Um fator começa aqui sem operador? (para 2pi, 3(1+2), 2 sqrt(4))
+fn _starts_factor() -> bool ={
+    return _kind() == "num" || _kind() == "id" || _is_op("(");
+}
+
+fn _term() -> number ={
+    number v = _unary();
+    bool going = true;
+    while (going) {
+        if (_is_op("*")) {
+            _pos++;
+            v = v * _unary();
+        } else if (_is_op("/")) {
+            _pos++;
+            number d = _unary();
+            if (d == 0.0) { return _fail("divisao por zero"); }
+            v = v / d;
+        } else if (_is_op("%")) {
+            _pos++;
+            number d = _unary();
+            if (d == 0.0) { return _fail("modulo por zero"); }
+            v = m::fmod(v, d);
+        } else if (_starts_factor()) {
+            v = v * _unary();
+        } else {
+            going = false;
+        }
+    }
+    return v;
+}
+
+fn _expr() -> number ={
+    number v = _term();
+    bool going = true;
+    while (going) {
+        if (_is_op("+")) {
+            _pos++;
+            v = v + _term();
+        } else if (_is_op("-")) {
+            _pos++;
+            v = v - _term();
+        } else {
+            going = false;
+        }
+    }
+    return v;
+}
+
+// Avalia uma linha completa, com atribuição opcional ("x = 2 + 3").
+fn _statement(string line) -> number ={
+    _tokenize(line);
+    string target = "";
+    if (_kinds[0] == "id" && _kinds[1] == "op" && _texts[1] == "=") {
+        target = _texts[0];
+        if (_is_constant(target)) { return _fail("'" + target + "' e uma constante"); }
+        _pos = 2;
+    }
+    number v = _expr();
+    if (_kind() != "end") {
+        return _fail("entrada inesperada " + _describe());
+    }
+    if (v != v) { return _fail("resultado indefinido (NaN)"); }
+    if (target != "") { _vars[target] = v; }
+    _ans = v;
+    return v;
+}
+
+
+// ── Formatação ───────────────────────────────────────────────
+
+// 12 algarismos significativos, sem zeros à direita: 0.1 + 0.2 → 0.3
+pub fn format_number(number x) -> string ={
+    if (x == 0.0) { return "0"; }
+    number a = m::abs(x);
+    if (a >= 1000000000000000.0 || a < 0.000001) { return to_string(x); }
+    int magnitude = to_int(m::floor(m::log10(a)));
+    int places = 11 - magnitude;
+    if (places < 0) { places = 0; }
+    number r = m::round_to(x, places);
+    if (m::is_integer(r)) { return to_string(to_int(r)); }
+    return to_string(r);
+}
+
+
+// ── API pública ──────────────────────────────────────────────
+
+// Avalia e devolve o número. Lança uma string em caso de erro.
+pub fn evaluate(string line) -> number ={
+    return _statement(line);
+}
+
+// Avalia e devolve o texto a exibir: o resultado ou "Erro: ...".
+pub fn execute(string line) -> string ={
+    string out = "";
+    try {
+        out = format_number(_statement(line));
+    } catch (string err) {
+        out = "Erro: " + strip_prefix(err, "[cryo-math] ");
+    }
+    return out;
+}
+
+pub fn set_degrees(bool on) ={
+    _degrees = on;
+}
+
+pub fn is_degrees() -> bool ={
+    return _degrees;
+}
+
+pub fn variables() -> map<string, number> ={
+    return _vars;
+}
+
+pub fn clear() ={
+    map<string, number> empty = {};
+    _vars = empty;
+    _ans = 0.0;
+}
