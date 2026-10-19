@@ -69,7 +69,7 @@ modo: graus
 ```text
 pasta/
 ├── burnout/            https://github.com/Victor-477/Burnout
-├── cryo/               https://github.com/Victor-477/Cryo   (branch dev)
+├── cryo/               https://github.com/Victor-477/Cryo
 ├── pyro/               https://github.com/Victor-477/pyro
 ├── Cryo-Math/          https://github.com/Victor-477/Cryo-Math
 └── Cryo_Calculator/    este repositório
@@ -77,7 +77,7 @@ pasta/
 
 ```bash
 git clone https://github.com/Victor-477/Burnout.git burnout
-git clone -b dev https://github.com/Victor-477/Cryo.git cryo
+git clone https://github.com/Victor-477/Cryo.git cryo
 git clone https://github.com/Victor-477/pyro.git pyro
 git clone https://github.com/Victor-477/Cryo-Math.git
 git clone https://github.com/Victor-477/Cryo_Calculator.git
